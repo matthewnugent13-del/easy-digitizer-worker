@@ -1,4 +1,5 @@
 import os, io, uuid
+from digitizer import make_dst_and_preview
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import boto3
@@ -41,14 +42,10 @@ async def create_job(file: UploadFile = File(...)):
     # Save the original
     put_bytes(f"jobs/{job_id}/source.png", src_bytes, "image/png")
 
-    # TODO: replace this block with your REAL digitizer:
-    # For now we just echo the PNG back as preview and write a fake DST.
-    img = Image.open(io.BytesIO(src_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    preview_bytes = buf.getvalue()
-    dst_bytes = b";FAKE_DST_FOR_TESTING\n"
+    # Use your real pipeline to generate both files
+    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes)
 
+    # Upload both artifacts
     put_bytes(f"jobs/{job_id}/preview.png", preview_bytes, "image/png")
     put_bytes(f"jobs/{job_id}/output.dst", dst_bytes, "application/octet-stream")
 
