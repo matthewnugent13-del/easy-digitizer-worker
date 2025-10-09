@@ -3,6 +3,8 @@ uvicorn[standard]
 boto3
 python-multipart
 Pillow
-# Add your digitizer deps here if you use them:
-# numpy
-# pyembroidery
+numpy
+opencv-python-headless
+shapely
+scikit-image
+pyembroidery
