@@ -20,6 +20,10 @@ app.add_middleware(
 def put_bytes(key: str, data: bytes, content_type: str):
     s3.put_object(Bucket=S3_BUCKET, Key=key, Body=data, ContentType=content_type)
 
+@app.get("/")
+def root():
+    return {"ok": True, "service": "easy-digitizer-worker"}
+
 def signed_url(key: str, seconds: int = 300):
     return s3.generate_presigned_url(
         "get_object",
