@@ -36,22 +36,32 @@ def signed_url(key: str, seconds: int = 300):
 
 @app.post("/jobs")
 async def create_job(file: UploadFile = File(...), colors: int = Form(6)):
-    if not file.filename.lower().endswith(".png"):
-        raise HTTPException(status_code=400, detail="PNG required")
-    job_id = str(uuid.uuid4())
+    try:
+        if not file.filename.lower().endswith(".png"):
+            raise HTTPException(status_code=400, detail="PNG required")
 
-    src_bytes = await file.read()
-    put_bytes(f"jobs/{job_id}/source.png", src_bytes, "image/png")
+        job_id = str(uuid.uuid4())
 
-    # generate with chosen color count
-    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes, int(colors))
+        src_bytes = await file.read()
+        put_bytes(f"jobs/{job_id}/source.png", src_bytes, "image/png")
 
-    put_bytes(f"jobs/{job_id}/preview.png", preview_bytes, "image/png")
-    put_bytes(f"jobs/{job_id}/output.dst", dst_bytes, "application/octet-stream")
+        # IMPORTANT: positional argument, not keyword (to match your current digitizer.py)
+        dst_bytes, preview_bytes = make_dst_and_preview(src_bytes, int(colors))
 
-    return {"jobId": job_id}
+        put_bytes(f"jobs/{job_id}/preview.png", preview_bytes, "image/png")
+        put_bytes(f"jobs/{job_id}/output.dst", dst_bytes, "application/octet-stream")
 
-@app.get("/jobs/{job_id}")
+        return {"jobId": job_id}
+
+    except HTTPException:
+        # FastAPI exceptions pass through as-is
+        raise
+    except Exception as e:
+        # Log full traceback to Render logs and return message to caller
+        tb = traceback.format_exc()
+        print("JOB ERROR:", tb)
+
+@app.get("/{job_id}")
 def job_status(job_id: str):
     key = f"jobs/{job_id}/preview.png"
     try:
