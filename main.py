@@ -2,6 +2,8 @@ import os, io, uuid
 from digitizer import make_dst_and_preview
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from digitizer import make_dst_and_preview
 import boto3
 from botocore.exceptions import ClientError
 from PIL import Image
@@ -33,19 +35,17 @@ def signed_url(key: str, seconds: int = 300):
     )
 
 @app.post("/jobs")
-async def create_job(file: UploadFile = File(...)):
+async def create_job(file: UploadFile = File(...), colors: int = Form(6)):
     if not file.filename.lower().endswith(".png"):
         raise HTTPException(status_code=400, detail="PNG required")
     job_id = str(uuid.uuid4())
 
     src_bytes = await file.read()
-    # Save the original
     put_bytes(f"jobs/{job_id}/source.png", src_bytes, "image/png")
 
-    # Use your real pipeline to generate both files
-    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes)
+    # generate with chosen color count
+    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes, n_colors=int(colors))
 
-    # Upload both artifacts
     put_bytes(f"jobs/{job_id}/preview.png", preview_bytes, "image/png")
     put_bytes(f"jobs/{job_id}/output.dst", dst_bytes, "application/octet-stream")
 
