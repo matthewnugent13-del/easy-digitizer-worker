@@ -44,7 +44,7 @@ async def create_job(file: UploadFile = File(...), colors: int = Form(6)):
     put_bytes(f"jobs/{job_id}/source.png", src_bytes, "image/png")
 
     # generate with chosen color count
-    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes, n_colors=int(colors))
+    dst_bytes, preview_bytes = make_dst_and_preview(src_bytes, int(colors))
 
     put_bytes(f"jobs/{job_id}/preview.png", preview_bytes, "image/png")
     put_bytes(f"jobs/{job_id}/output.dst", dst_bytes, "application/octet-stream")
