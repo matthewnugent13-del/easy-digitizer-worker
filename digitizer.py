@@ -38,8 +38,12 @@ def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, 
 
     # 2) Quantize (clamp to 1..8 colors)
     n = max(1, min(8, int(n_colors)))
-    indexed_img, palette_rgb, _ = quantize_image(
-        fitted, n_colors=n, remove_bg=True, ignore_alpha_only=True, alpha_threshold=8
+indexed_img, palette_rgb, _ = quantize_image(
+    fitted,
+    n_colors=n,
+    remove_bg=True,
+    ignore_alpha_only=True,
+    alpha_threshold=8,
     )
 
     # 3) Vectorize (skip tiny regions for speed)
