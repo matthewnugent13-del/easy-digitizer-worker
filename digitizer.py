@@ -25,7 +25,81 @@ from writer import save_dst
 # pyembroidery for preview-from-stitches
 from pyembroidery import read as read_emb, STITCH, JUMP, TRIM, COLOR_CHANGE, END
 
-PX_PER_MM = 10.0  # must match your writer.py UNIT_SCALE assumptions (10 units/mm)
+# Near top:
+
+PX_PER_MM = 7.0  # was 10.0 — ~30% fewer points → faster
+
+# Replace your make_dst_and_preview signature + quantize call with this version:
+def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, bytes]:
+    """Returns (dst_bytes, preview_png_bytes) using your pipeline + faster defaults."""
+    # 1) Load & fit
+    src = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    fitted = fit_to_hoop(src, hoop_mm=(130.0, 180.0), px_per_mm=PX_PER_MM)
+
+    # 2) Quantize (clamp to 1..8 colors)
+    n = max(1, min(8, int(n_colors)))
+    indexed_img, palette_rgb, _ = quantize_image(
+        fitted, n_colors=n, remove_bg=True, ignore_alpha_only=True, alpha_threshold=8
+    )
+
+    # 3) Vectorize (skip tiny regions for speed)
+    regions = extract_color_regions(indexed_img, min_region_px=240, smooth_px=2.0)
+
+    areas = compute_color_areas(regions)
+    stack_order = sorted(areas.keys(), key=lambda k: areas[k], reverse=True)
+    regions = clip_by_stack(regions, stack_order, margin_mm=0.05)
+
+    # 4) Stitch layers (same logic, but using PX_PER_MM=7.0 above)
+    layers_px = outline_then_fill_layers_universal(
+        regions,
+        px_per_mm=PX_PER_MM,
+        outline_step_px=2.5,
+        base_angle_deg=0.0,
+        tatami_spacing_mm=0.50,
+        narrow_fill_spacing_mm=0.60,
+        satin_spacing_mm=0.40,
+        angle_mode="per_color_random",
+        angle_jitter_deg=0.0,
+        serpentine=True,
+        satin_max_width_mm=4.5,
+        split_satin_max_width_mm=10.0,
+        pull_comp_mm=0.30,
+        tatami_bleed_mm=0.08,
+    )
+    layers_px = normalize_layers(layers_px, translate_origin="min")
+
+    cmd_layers = plan_commands_from_layers(
+        layers_px,
+        px_per_mm=PX_PER_MM,
+        max_run_mm=float(MAX_RUN_TRAVEL_MM),
+        max_jump_mm=float(MAX_JUMP_MM),
+        run_step_mm=float(RUN_STEP_MM),
+        regions=regions,
+        run_inside_regions_only=True,
+        run_inset_mm=0.30,
+    )
+
+    # 5) Write DST to bytes
+    tmp_path = "design.dst"
+    save_dst(cmd_layers, tmp_path, palette_rgb=palette_rgb, color_order=stack_order, px_per_mm=PX_PER_MM)
+    with open(tmp_path, "rb") as f:
+        dst_bytes = f.read()
+    try: os.remove(tmp_path)
+    except: pass
+
+    # 6) Render stitch preview (slightly smaller for speed)
+    with open(tmp_path, "wb") as f:
+        f.write(dst_bytes)
+    pat = read_emb(tmp_path)
+    try: os.remove(tmp_path)
+    except: pass
+
+    img = _render_stitch_preview(pat, width_px=700, stroke_px=2, flip_vertical=False)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    preview_png_bytes = buf.getvalue()
+
+    return dst_bytes, preview_png_bytes
+
 
 def _parse_pattern_by_color(pat) -> Dict:
     """(Copied/trimmed from your Streamlit app) turn EmbPattern -> polylines per step."""
