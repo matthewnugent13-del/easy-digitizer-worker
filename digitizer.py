@@ -162,18 +162,15 @@ def _render_stitch_preview(
             for idx in color_order:
                 if 0 <= idx < len(palette_rgb):
                     col = palette_rgb[idx]
-                    # col might be (r,g,b) or [r,g,b,...]
                     if isinstance(col, (list, tuple)) and len(col) >= 3:
                         r, g, b = col[0], col[1], col[2]
                         mapped.append((int(r), int(g), int(b)))
             if mapped:
-                # If fewer mapped than steps, repeat so we always have enough
                 while len(mapped) < len(steps):
                     mapped.extend(mapped)
                 cols = mapped[: len(steps)]
         except Exception:
-            # if anything goes wrong, fall back to auto colors
-            pass
+            pass  # fallback to auto colors on any error
 
     # Draw stitches per step
     for i, step in enumerate(steps):
@@ -225,7 +222,7 @@ def make_dst_and_preview(
     src = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     fitted = fit_to_hoop(src, hoop_mm=(130.0, 180.0), px_per_mm=PX_PER_MM)
 
-    # 2) Quantize to 1..8 colors (fast path; falls back to Pillow if sklearn absent)
+    # 2) Quantize to 1..8 colors
     n = max(1, min(8, int(n_colors)))
     indexed_img, palette_rgb, _ = quantize_image(
         fitted,
@@ -302,7 +299,6 @@ def make_dst_and_preview(
     except Exception:
         pass
 
-    # Parse once so we can both render + count trims
     data = _parse_pattern_by_color(pat)
     trim_count = len(data["trims"])
 
@@ -318,7 +314,7 @@ def make_dst_and_preview(
     img.save(buf, format="PNG")
     preview_png_bytes = buf.getvalue()
 
-    # Build a simple JSON-safe palette: [{r,g,b}, ...] in color_order
+    # Build JSON-safe palette: [{r,g,b}, ...] in color_order
     simple_palette: List[Dict[str, int]] = []
     try:
         if palette_rgb is not None:
