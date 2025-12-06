@@ -2,7 +2,7 @@
 # Generates DST bytes + a stitch preview PNG (like your Streamlit viewer).
 
 from __future__ import annotations
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import io, os, math
 from PIL import Image, ImageDraw
 
@@ -27,6 +27,7 @@ from pyembroidery import read as read_emb, STITCH, JUMP, TRIM, COLOR_CHANGE, END
 
 # --------- speed / density controls ---------
 PX_PER_MM = 7.0  # was 10.0; fewer points → faster
+
 
 # --------- helper: parse EmbPattern into color steps / jumps / trims ---------
 def _parse_pattern_by_color(pat) -> dict:
@@ -61,9 +62,12 @@ def _parse_pattern_by_color(pat) -> dict:
         cur_jump = []
 
     for (x, y, cmd) in stitches:
-        x = float(x); y = float(y)
-        minx = min(minx, x); maxx = max(maxx, x)
-        miny = min(miny, y); maxy = max(maxy, y)
+        x = float(x)
+        y = float(y)
+        minx = min(minx, x)
+        maxx = max(maxx, x)
+        miny = min(miny, y)
+        maxy = max(maxy, y)
 
         if cmd == STITCH:
             cur_poly.append((x, y))
@@ -72,30 +76,50 @@ def _parse_pattern_by_color(pat) -> dict:
             _flush_poly()
             cur_jump.append((x, y))
         elif cmd == TRIM:
-            _flush_poly(); _flush_jump()
+            _flush_poly()
+            _flush_jump()
             trims.append((x, y))
         elif cmd == COLOR_CHANGE:
-            _flush_poly(); _flush_jump()
-            steps.append(cur_step if (cur_step["polylines"] or cur_step["stitch_count"]) else {"polylines": [], "stitch_count": 0})
+            _flush_poly()
+            _flush_jump()
+            if cur_step["polylines"] or cur_step["stitch_count"]:
+                steps.append(cur_step)
             cur_step = {"polylines": [], "stitch_count": 0}
         elif cmd == END:
             break
         else:
-            _flush_poly(); _flush_jump()
+            _flush_poly()
+            _flush_jump()
 
-    _flush_poly(); _flush_jump()
+    _flush_poly()
+    _flush_jump()
     if cur_step["polylines"] or cur_step["stitch_count"] > 0:
         steps.append(cur_step)
 
     if minx > maxx or miny > maxy:
-        minx = miny = 0.0; maxx = maxy = 1.0
+        minx = miny = 0.0
+        maxx = maxy = 1.0
 
-    return {"steps": steps, "jumps": jumps, "trims": trims, "bounds": (minx, miny, maxx, maxy)}
+    return {
+        "steps": steps,
+        "jumps": jumps,
+        "trims": trims,
+        "bounds": (minx, miny, maxx, maxy),
+    }
 
-# --------- helper: vivid stitch preview like Streamlit viewer ---------
-def _render_stitch_preview(pat, width_px: int = 700, stroke_px: int = 2, flip_vertical: bool = False) -> Image.Image:
-    data = _parse_pattern_by_color(pat)
-    steps, jumps, trims = data["steps"], data["jumps"], data["trims"]
+
+# --------- helper: vivid stitch preview using real palette ---------
+def _render_stitch_preview(
+    data: dict,
+    width_px: int = 700,
+    stroke_px: int = 2,
+    flip_vertical: bool = False,
+    palette_rgb: List = None,
+    color_order: List[int] = None,
+) -> Image.Image:
+    steps = data["steps"]
+    jumps = data["jumps"]
+    trims = data["trims"]
     (minx, miny, maxx, maxy) = data["bounds"]
 
     w_units = max(1e-6, maxx - minx)
@@ -105,48 +129,97 @@ def _render_stitch_preview(pat, width_px: int = 700, stroke_px: int = 2, flip_ve
     W = int(width_px)
     H = max(int(W * aspect), 200)
 
-    canvas = Image.new("RGB", (W + pad*2, H + pad*2), (255, 255, 255))
+    canvas = Image.new("RGB", (W + pad * 2, H + pad * 2), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
     scale = W / w_units
-    def tx(x: float) -> int: return int(pad + (x - minx) * scale)
-    def ty(y: float) -> int:
-        return int(pad + (maxy - y) * scale) if flip_vertical else int(pad + (y - miny) * scale)
 
-    # distinct colors per step (simple HSV wheel)
-    def _auto_colors(n: int) -> List[tuple[int,int,int]]:
-        out: List[tuple[int,int,int]] = []
+    def tx(x: float) -> int:
+        return int(pad + (x - minx) * scale)
+
+    def ty(y: float) -> int:
+        if flip_vertical:
+            return int(pad + (maxy - y) * scale)
+        return int(pad + (y - miny) * scale)
+
+    # Default: distinct colors per step (HSV wheel)
+    def _auto_colors(n: int) -> List[tuple[int, int, int]]:
+        out: List[tuple[int, int, int]] = []
         for i in range(max(1, n)):
             h = i / max(1, n)
             import colorsys
+
             r, g, b = colorsys.hsv_to_rgb(h, 0.85, 0.95)
-            out.append((int(r*255), int(g*255), int(b*255)))
+            out.append((int(r * 255), int(g * 255), int(b * 255)))
         return out
 
     cols = _auto_colors(len(steps))
+
+    # If we have a real palette + color order from quantization, use that
+    if palette_rgb is not None and color_order is not None:
+        mapped: List[tuple[int, int, int]] = []
+        try:
+            for idx in color_order:
+                if 0 <= idx < len(palette_rgb):
+                    col = palette_rgb[idx]
+                    # col might be (r,g,b) or [r,g,b,...]
+                    if isinstance(col, (list, tuple)) and len(col) >= 3:
+                        r, g, b = col[0], col[1], col[2]
+                        mapped.append((int(r), int(g), int(b)))
+            if mapped:
+                # If fewer mapped than steps, repeat so we always have enough
+                while len(mapped) < len(steps):
+                    mapped.extend(mapped)
+                cols = mapped[: len(steps)]
+        except Exception:
+            # if anything goes wrong, fall back to auto colors
+            pass
+
+    # Draw stitches per step
     for i, step in enumerate(steps):
         col = cols[i % len(cols)]
         for pl in step["polylines"]:
             if len(pl) >= 2:
-                draw.line([(tx(x), ty(y)) for (x, y) in pl], fill=col, width=stroke_px, joint="curve")
+                draw.line(
+                    [(tx(x), ty(y)) for (x, y) in pl],
+                    fill=col,
+                    width=stroke_px,
+                    joint="curve",
+                )
 
     # light gray for jumps
     for jpl in jumps:
         if len(jpl) >= 2:
-            draw.line([(tx(x), ty(y)) for (x, y) in jpl], fill=(180, 180, 180), width=max(1, stroke_px-1))
+            draw.line(
+                [(tx(x), ty(y)) for (x, y) in jpl],
+                fill=(180, 180, 180),
+                width=max(1, stroke_px - 1),
+            )
 
     # red dots for trims
     for (x, y) in trims:
         cx, cy = tx(x), ty(y)
         r = max(3, stroke_px + 1)
-        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(220, 0, 0), width=2)
+        draw.ellipse(
+            (cx - r, cy - r, cx + r, cy + r),
+            outline=(220, 0, 0),
+            width=2,
+        )
 
     return canvas
 
+
 # --------- main API called from main.py ---------
-def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, bytes]:
+def make_dst_and_preview(
+    image_bytes: bytes,
+    n_colors: int = 6,
+) -> Tuple[bytes, bytes, List[Dict[str, int]], int]:
     """
-    Returns (dst_bytes, preview_png_bytes)
+    Returns:
+        dst_bytes,
+        preview_png_bytes,
+        palette (list of {r,g,b} dicts in stitch/color order),
+        trim_count (int)
     """
     # 1) Load & fit to hoop
     src = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
@@ -155,11 +228,19 @@ def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, 
     # 2) Quantize to 1..8 colors (fast path; falls back to Pillow if sklearn absent)
     n = max(1, min(8, int(n_colors)))
     indexed_img, palette_rgb, _ = quantize_image(
-        fitted, n_colors=n, remove_bg=True, ignore_alpha_only=True, alpha_threshold=8
+        fitted,
+        n_colors=n,
+        remove_bg=True,
+        ignore_alpha_only=True,
+        alpha_threshold=8,
     )
 
     # 3) Vectorize (skip tiny regions for speed)
-    regions = extract_color_regions(indexed_img, min_region_px=240, smooth_px=2.0)
+    regions = extract_color_regions(
+        indexed_img,
+        min_region_px=240,
+        smooth_px=2.0,
+    )
 
     # 4) Stack & clip
     areas = compute_color_areas(regions)
@@ -198,7 +279,13 @@ def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, 
 
     # 6) Write DST to bytes
     tmp_path = "design.dst"
-    save_dst(cmds, tmp_path, palette_rgb=palette_rgb, color_order=stack_order, px_per_mm=PX_PER_MM)
+    save_dst(
+        cmds,
+        tmp_path,
+        palette_rgb=palette_rgb,
+        color_order=stack_order,
+        px_per_mm=PX_PER_MM,
+    )
     with open(tmp_path, "rb") as f:
         dst_bytes = f.read()
     try:
@@ -206,7 +293,7 @@ def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, 
     except Exception:
         pass
 
-    # 7) Render stitch preview from DST
+    # 7) Render stitch preview from DST, using real palette
     with open(tmp_path, "wb") as f:
         f.write(dst_bytes)
     pat = read_emb(tmp_path)
@@ -215,9 +302,33 @@ def make_dst_and_preview(image_bytes: bytes, n_colors: int = 6) -> Tuple[bytes, 
     except Exception:
         pass
 
-    img = _render_stitch_preview(pat, width_px=700, stroke_px=2, flip_vertical=False)
+    # Parse once so we can both render + count trims
+    data = _parse_pattern_by_color(pat)
+    trim_count = len(data["trims"])
+
+    img = _render_stitch_preview(
+        data,
+        width_px=700,
+        stroke_px=2,
+        flip_vertical=False,
+        palette_rgb=palette_rgb,
+        color_order=stack_order,
+    )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     preview_png_bytes = buf.getvalue()
 
-    return dst_bytes, preview_png_bytes
+    # Build a simple JSON-safe palette: [{r,g,b}, ...] in color_order
+    simple_palette: List[Dict[str, int]] = []
+    try:
+        if palette_rgb is not None:
+            for idx in stack_order:
+                if 0 <= idx < len(palette_rgb):
+                    col = palette_rgb[idx]
+                    if isinstance(col, (list, tuple)) and len(col) >= 3:
+                        r, g, b = int(col[0]), int(col[1]), int(col[2])
+                        simple_palette.append({"r": r, "g": g, "b": b})
+    except Exception:
+        simple_palette = []
+
+    return dst_bytes, preview_png_bytes, simple_palette, trim_count
